@@ -5,7 +5,6 @@
 #include <iostream>
 #include <MinHook.h>
 
-// 转发系统 version.dll 的导出函数
 #pragma comment(linker, "/export:GetFileVersionInfoA=C:\\Windows\\System32\\version.GetFileVersionInfoA")
 #pragma comment(linker, "/export:GetFileVersionInfoByHandle=C:\\Windows\\System32\\version.GetFileVersionInfoByHandle")
 #pragma comment(linker, "/export:GetFileVersionInfoExW=C:\\Windows\\System32\\version.GetFileVersionInfoExW")
@@ -28,6 +27,7 @@ typedef SECURITY_STATUS(SEC_ENTRY* DecryptMessage_t)(
 );
 
 DecryptMessage_t True_DecryptMessage = nullptr;
+volatile long g_hookHitCount = 0; // 记录 Hook 触发次数
 
 SECURITY_STATUS SEC_ENTRY Detour_DecryptMessage(
     PCtxtHandle     phContext,
@@ -35,6 +35,11 @@ SECURITY_STATUS SEC_ENTRY Detour_DecryptMessage(
     unsigned long   MessageSeqNo,
     unsigned long* pfQOP
 ) {
+    // 只要系统解密函数被调用，这里就会自增并强制打印，哪怕内容为空也能证明 Hook 生效了
+    long count = InterlockedIncrement(&g_hookHitCount);
+    std::cout << "[*] DecryptMessage called! Hit count: " << count << std::endl;
+    std::cout.flush(); // 强制刷新缓冲区
+
     SECURITY_STATUS status = True_DecryptMessage(phContext, pMessage, MessageSeqNo, pfQOP);
 
     if (status == SEC_E_OK && pMessage != nullptr) {
@@ -43,6 +48,7 @@ SECURITY_STATUS SEC_ENTRY Detour_DecryptMessage(
             if (pBuffer->BufferType == SECBUFFER_DATA && pBuffer->cbBuffer > 0) {
                 std::string decryptedResponse((char*)pBuffer->pvBuffer, pBuffer->cbBuffer);
                 std::cout << "\n[HTTPS RECV CLEAR TEXT] >>>\n" << decryptedResponse << "\n<<<\n";
+                std::cout.flush();
             }
         }
     }
@@ -50,27 +56,48 @@ SECURITY_STATUS SEC_ENTRY Detour_DecryptMessage(
 }
 
 void InitHook() {
-    if (MH_Initialize() != MH_OK) return;
+    // 打印一行确认 DLL 已经成功加载并执行了初始化
+    std::cout << "[+] version.dll injected and InitHook started..." << std::endl;
+    std::cout.flush();
+
+    if (MH_Initialize() != MH_OK) {
+        std::cout << "[-] MH_Initialize failed!" << std::endl;
+        return;
+    }
 
     HMODULE hSecur32 = LoadLibraryA("secur32.dll");
     if (hSecur32) {
         FARPROC pDecrypt = GetProcAddress(hSecur32, "DecryptMessage");
         if (pDecrypt) {
-            MH_CreateHook(pDecrypt, &Detour_DecryptMessage, (LPVOID*)&True_DecryptMessage);
-            MH_EnableHook(MH_ALL_HOOKS);
+            if (MH_CreateHook(pDecrypt, &Detour_DecryptMessage, (LPVOID*)&True_DecryptMessage) == MH_OK) {
+                MH_EnableHook(MH_ALL_HOOKS);
+                std::cout << "[+] DecryptMessage Hook Enabled Successfully!" << std::endl;
+            } else {
+                std::cout << "[-] MH_CreateHook failed!" << std::endl;
+            }
+        } else {
+            std::cout << "[-] GetProcAddress DecryptMessage failed!" << std::endl;
         }
+    } else {
+        std::cout << "[-] LoadLibrary secur32.dll failed!" << std::endl;
     }
+    std::cout.flush();
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
-    case DLL_PROCESS_ATTACH:
+    case DLL_PROCESS_ATTACH: {
         DisableThreadLibraryCalls(hModule);
         AllocConsole();
         FILE* dummy;
         freopen_s(&dummy, "CONOUT$", "w", stdout);
+        
+        std::cout << "[=] DLL_PROCESS_ATTACH triggered." << std::endl;
+        std::cout.flush();
+
         InitHook();
         break;
+    }
     case DLL_PROCESS_DETACH:
         MH_DisableHook(MH_ALL_HOOKS);
         MH_Uninitialize();
