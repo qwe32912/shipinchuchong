@@ -15,7 +15,7 @@ jobs:
         
     - name: Compile DLL
       run: |
-        cl.exe /LD version.cpp /Fe:version.dll /DEF:version.def
+        cl.exe /LD version.cpp /Fe:version.dll /link /EXPORT:GetFileVersionInfoA=GetFileVersionInfoA_Proxy /EXPORT:GetFileVersionInfoSizeA=GetFileVersionInfoSizeA_Proxy /EXPORT:GetFileVersionInfoSizeW=GetFileVersionInfoSizeW_Proxy /EXPORT:GetFileVersionInfoW=GetFileVersionInfoW_Proxy /EXPORT:VerQueryValueA=VerQueryValueA_Proxy /EXPORT:VerQueryValueW=VerQueryValueW_Proxy
         
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
