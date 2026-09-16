@@ -15,7 +15,7 @@ jobs:
         
     - name: Compile DLL
       run: |
-        cl.exe /LD version.cpp /Fe:version.dll
+        cl.exe /LD version.cpp /Fe:version.dll /DEF:version.def
         
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
