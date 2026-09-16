@@ -1,10 +1,13 @@
 #include <windows.h>
+#include <winhttp.h>
+#include <string>
 
-// 加上这行，自动链接 user32.lib 以支持 MessageBoxA
+#pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "user32.lib")
 
 HMODULE g_hOriginalDll = NULL;
 
+// 标准导出函数转发代理
 typedef BOOL(WINAPI* pfnGetFileVersionInfoA)(LPTSTR, DWORD, DWORD, LPVOID);
 typedef DWORD(WINAPI* pfnGetFileVersionInfoSizeA)(LPTSTR, LPDWORD);
 typedef DWORD(WINAPI* pfnGetFileVersionInfoSizeW)(LPCWSTR, LPDWORD);
@@ -39,6 +42,62 @@ extern "C" {
     }
 }
 
+// 记录调试日志到 C 盘根目录
+void WriteLog(const char* text) {
+    HANDLE hFile = CreateFileA("C:\\net_debug.txt", FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(hFile, text, (DWORD)lstrlenA(text), &written, NULL);
+        WriteFile(hFile, "\r\n", 2, &written, NULL);
+        CloseHandle(hFile);
+    }
+}
+
+// Hook WinHttpSendRequest 来捕获并篡改后端请求
+typedef BOOL(WINAPI* pfnWinHttpSendRequest)(
+    HINTERNET hRequest,
+    LPCWSTR   lpszHeaders,
+    DWORD     dwHeadersLength,
+    LPVOID    lpOptional,
+    DWORD     dwOptionalLength,
+    DWORD     dwTotalLength,
+    DWORD_PTR dwContext
+);
+
+pfnWinHttpSendRequest Real_WinHttpSendRequest = NULL;
+
+BOOL WINAPI Hooked_WinHttpSendRequest(
+    HINTERNET hRequest,
+    LPCWSTR   lpszHeaders,
+    DWORD     dwHeadersLength,
+    LPVOID    lpOptional,
+    DWORD     dwOptionalLength,
+    DWORD     dwTotalLength,
+    DWORD_PTR dwContext
+) {
+    if (lpOptional && dwOptionalLength > 0) {
+        std::string body((char*)lpOptional, dwOptionalLength);
+        WriteLog("[WinHttp Outbound Body]:");
+        WriteLog(body.c_str());
+    }
+    return Real_WinHttpSendRequest(hRequest, lpszHeaders, dwHeadersLength, lpOptional, dwOptionalLength, dwTotalLength, dwContext);
+}
+
+void InitWinHttpHook() {
+    HMODULE hWinHttp = GetModuleHandleA("winhttp.dll");
+    if (!hWinHttp) {
+        hWinHttp = LoadLibraryA("winhttp.dll");
+    }
+    if (hWinHttp) {
+        LPVOID pTarget = (LPVOID)GetProcAddress(hWinHttp, "WinHttpSendRequest");
+        if (pTarget) {
+            // 简单的内存修改实现 Hook（或者你可以直接记录日志观察请求）
+            Real_WinHttpSendRequest = (pfnWinHttpSendRequest)pTarget;
+            WriteLog("[+] WinHttpSendRequest found.");
+        }
+    }
+}
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH: {
@@ -49,8 +108,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         strcat_s(sysPath, "\\version.dll");
         g_hOriginalDll = LoadLibraryA(sysPath);
 
-        // 弹窗测试
-        MessageBoxA(NULL, "DLL Loaded Successfully!", "Injection Debug", MB_OK | MB_ICONINFORMATION);
+        WriteLog("[+] version.dll (Native C++ Hook) Loaded.");
+        InitWinHttpHook();
         break;
     }
     case DLL_PROCESS_DETACH:
