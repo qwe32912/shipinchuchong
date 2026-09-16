@@ -4,25 +4,44 @@
 HMODULE g_hOriginalDll = NULL;
 HMODULE g_hMyModule = NULL;
 
-// 导出标准的 version.dll 函数，用于实现代理转发
+// 定义原函数的函数指针类型
+typedef BOOL(WINAPI* pfnGetFileVersionInfoA)(LPTSTR, DWORD, DWORD, LPVOID);
+typedef DWORD(WINAPI* pfnGetFileVersionInfoSizeA)(LPTSTR, LPDWORD);
+typedef DWORD(WINAPI* pfnGetFileVersionInfoSizeW)(LPCWSTR, LPDWORD);
+typedef BOOL(WINAPI* pfnGetFileVersionInfoW)(LPCWSTR, DWORD, DWORD, LPVOID);
+typedef BOOL(WINAPI* pfnVerQueryValueA)(LPCVOID, LPCWSTR, LPVOID*, PUINT);
+typedef BOOL(WINAPI* pfnVerQueryValueW)(LPCVOID, LPCWSTR, LPVOID*, PUINT);
+
+// 64位下 extern "C" 不会进行符号修饰，导出的函数名会与原版系统完全一致
 extern "C" {
-    __declspec(dllexport) BOOL WINAPI GetFileVersionInfoA_Proxy(LPTSTR a, DWORD b, DWORD c, LPVOID d) {
-        return FALSE;
+    __declspec(dllexport) BOOL WINAPI GetFileVersionInfoA(LPTSTR a, DWORD b, DWORD c, LPVOID d) {
+        auto fn = (pfnGetFileVersionInfoA)GetProcAddress(g_hOriginalDll, "GetFileVersionInfoA");
+        return fn ? fn(a, b, c, d) : FALSE;
     }
-    __declspec(dllexport) DWORD WINAPI GetFileVersionInfoSizeA_Proxy(LPTSTR a, LPDWORD b) {
-        return 0;
+
+    __declspec(dllexport) DWORD WINAPI GetFileVersionInfoSizeA(LPTSTR a, LPDWORD b) {
+        auto fn = (pfnGetFileVersionInfoSizeA)GetProcAddress(g_hOriginalDll, "GetFileVersionInfoSizeA");
+        return fn ? fn(a, b) : 0;
     }
-    __declspec(dllexport) DWORD WINAPI GetFileVersionInfoSizeW_Proxy(LPCWSTR a, LPDWORD b) {
-        return 0;
+
+    __declspec(dllexport) DWORD WINAPI GetFileVersionInfoSizeW(LPCWSTR a, LPDWORD b) {
+        auto fn = (pfnGetFileVersionInfoSizeW)GetProcAddress(g_hOriginalDll, "GetFileVersionInfoSizeW");
+        return fn ? fn(a, b) : 0;
     }
-    __declspec(dllexport) DWORD WINAPI GetFileVersionInfoW_Proxy(LPCWSTR a, DWORD b, DWORD c, LPVOID d) {
-        return FALSE;
+
+    __declspec(dllexport) BOOL WINAPI GetFileVersionInfoW(LPCWSTR a, DWORD b, DWORD c, LPVOID d) {
+        auto fn = (pfnGetFileVersionInfoW)GetProcAddress(g_hOriginalDll, "GetFileVersionInfoW");
+        return fn ? fn(a, b, c, d) : FALSE;
     }
-    __declspec(dllexport) BOOL WINAPI VerQueryValueA_Proxy(LPCVOID a, LPCWSTR b, LPVOID* c, PUINT d) {
-        return FALSE;
+
+    __declspec(dllexport) BOOL WINAPI VerQueryValueA(LPCVOID a, LPCWSTR b, LPVOID* c, PUINT d) {
+        auto fn = (pfnVerQueryValueA)GetProcAddress(g_hOriginalDll, "VerQueryValueA");
+        return fn ? fn(a, b, c, d) : FALSE;
     }
-    __declspec(dllexport) BOOL WINAPI VerQueryValueW_Proxy(LPCVOID a, LPCWSTR b, LPVOID* c, PUINT d) {
-        return FALSE;
+
+    __declspec(dllexport) BOOL WINAPI VerQueryValueW(LPCVOID a, LPCWSTR b, LPVOID* c, PUINT d) {
+        auto fn = (pfnVerQueryValueW)GetProcAddress(g_hOriginalDll, "VerQueryValueW");
+        return fn ? fn(a, b, c, d) : FALSE;
     }
 }
 
@@ -50,13 +69,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         g_hMyModule = hModule;
         DisableThreadLibraryCalls(hModule);
 
-        // 加载系统的真正 version.dll
+        // 加载系统真正的 version.dll
         char sysPath[MAX_PATH];
         GetSystemDirectoryA(sysPath, MAX_PATH);
         strcat_s(sysPath, "\\version.dll");
         g_hOriginalDll = LoadLibraryA(sysPath);
 
-        WriteLog("[+] SUCCESS: version.dll injected and DllMain executed!");
+        WriteLog("[+] SUCCESS: version.dll proxy loaded and functions forwarded!");
         break;
     }
     case DLL_PROCESS_DETACH:
