@@ -1,5 +1,4 @@
 #include <windows.h>
-#include <stdio.h>
 
 HMODULE g_hOriginalDll = NULL;
 HMODULE g_hMyModule = NULL;
@@ -38,8 +37,8 @@ extern "C" {
     }
 }
 
-// 简单的日志记录函数，用于确认 DLL 是否成功注入
-void WriteLog(const char* msg) {
+// 使用 Win32 API 安全写入日志，避开 CRT 未初始化的坑
+DWORD WINAPI LogThread(LPVOID lpParam) {
     char path[MAX_PATH];
     if (g_hMyModule) {
         GetModuleFileNameA(g_hMyModule, path, MAX_PATH);
@@ -50,11 +49,14 @@ void WriteLog(const char* msg) {
         strcpy_s(path, "C:\\inject_debug.txt");
     }
 
-    FILE* f = fopen(path, "a");
-    if (f) {
-        fprintf(f, "%s\n", msg);
-        fclose(f);
+    HANDLE hFile = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        const char* msg = "[+] SUCCESS: version.dll loaded and running via Win32 API!\r\n";
+        DWORD written = 0;
+        WriteFile(hFile, msg, (DWORD)lstrlenA(msg), &written, NULL);
+        CloseHandle(hFile);
     }
+    return 0;
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -68,7 +70,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         strcat_s(sysPath, "\\version.dll");
         g_hOriginalDll = LoadLibraryA(sysPath);
 
-        WriteLog("[+] SUCCESS: version.dll loaded successfully for Rust/JS application.");
+        // 启动独立线程写日志，确保 100% 成功落盘
+        CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)LogThread, NULL, 0, NULL);
         break;
     }
     case DLL_PROCESS_DETACH:
