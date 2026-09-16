@@ -34,38 +34,30 @@ SECURITY_STATUS SEC_ENTRY Detour_DecryptMessage(
     unsigned long   MessageSeqNo,
     unsigned long* pfQOP
 ) {
-    // 必须先调用原函数让程序正常解密，否则网络直接瘫痪
     SECURITY_STATUS status = True_DecryptMessage(phContext, pMessage, MessageSeqNo, pfQOP);
 
-    // 使用 __try / __except 保护，防止野指针直接导致客户端闪退
+    // 使用 __try 保护，且函数内无 std::string 等带析构的对象，完美绕过 C2712 编译错误
     __try {
-        if (status == SEC_E_OK && pMessage != nullptr && pMessage->pBuffers != nullptr) {
-            std::cout << "[*] DecryptMessage Success, cBuffers = " << pMessage->cBuffers << std::endl;
-            std::cout.flush();
-
+        if (status == 0 && pMessage != nullptr && pMessage->pBuffers != nullptr) {
             for (unsigned long i = 0; i < pMessage->cBuffers; i++) {
                 PSecBuffer pBuffer = &pMessage->pBuffers[i];
                 if (pBuffer && pBuffer->BufferType == SECBUFFER_DATA && pBuffer->cbBuffer > 0 && pBuffer->pvBuffer != nullptr) {
-                    std::string decryptedResponse((char*)pBuffer->pvBuffer, pBuffer->cbBuffer);
-                    std::cout << "\n[HTTPS RECV CLEAR TEXT] >>>\n" << decryptedResponse << "\n<<<\n";
+                    std::cout << "\n[HTTPS RECV] >>>\n";
+                    std::cout.write((char*)pBuffer->pvBuffer, pBuffer->cbBuffer);
+                    std::cout << "\n<<<\n";
                     std::cout.flush();
                 }
             }
         }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        // 如果读取内存崩溃，在这里拦截并打印，保护程序不闪退
-        std::cout << "[-] Exception caught inside Detour_DecryptMessage!" << std::endl;
-        std::cout.flush();
+        // 捕获异常，防止因野指针导致客户端崩溃
     }
 
     return status;
 }
 
 void InitHook() {
-    std::cout << "[+] version.dll injected and InitHook started..." << std::endl;
-    std::cout.flush();
-
     if (MH_Initialize() != MH_OK) return;
 
     HMODULE hSecur32 = LoadLibraryA("secur32.dll");
@@ -74,11 +66,9 @@ void InitHook() {
         if (pDecrypt) {
             if (MH_CreateHook(pDecrypt, &Detour_DecryptMessage, (LPVOID*)&True_DecryptMessage) == MH_OK) {
                 MH_EnableHook(MH_ALL_HOOKS);
-                std::cout << "[+] DecryptMessage Hook Enabled Successfully!" << std::endl;
             }
         }
     }
-    std::cout.flush();
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -88,10 +78,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         AllocConsole();
         FILE* dummy;
         freopen_s(&dummy, "CONOUT$", "w", stdout);
-        
-        std::cout << "[=] DLL_PROCESS_ATTACH triggered." << std::endl;
-        std::cout.flush();
-
         InitHook();
         break;
     }
