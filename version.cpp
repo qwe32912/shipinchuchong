@@ -1,13 +1,10 @@
 #include <windows.h>
-#include <winhttp.h>
-#include <string>
-
-#pragma comment(lib, "winhttp.lib")
-#pragma comment(lib, "user32.lib")
+#include <stdio.h>
 
 HMODULE g_hOriginalDll = NULL;
+CRITICAL_SECTION g_LogLock;
+char g_LogPath[MAX_PATH] = { 0 };
 
-// 标准导出函数转发代理
 typedef BOOL(WINAPI* pfnGetFileVersionInfoA)(LPTSTR, DWORD, DWORD, LPVOID);
 typedef DWORD(WINAPI* pfnGetFileVersionInfoSizeA)(LPTSTR, LPDWORD);
 typedef DWORD(WINAPI* pfnGetFileVersionInfoSizeW)(LPCWSTR, LPDWORD);
@@ -42,77 +39,49 @@ extern "C" {
     }
 }
 
-// 记录调试日志到 C 盘根目录
-void WriteLog(const char* text) {
-    HANDLE hFile = CreateFileA("C:\\net_debug.txt", FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        DWORD written = 0;
-        WriteFile(hFile, text, (DWORD)lstrlenA(text), &written, NULL);
-        WriteFile(hFile, "\r\n", 2, &written, NULL);
-        CloseHandle(hFile);
-    }
-}
-
-// Hook WinHttpSendRequest 来捕获并篡改后端请求
-typedef BOOL(WINAPI* pfnWinHttpSendRequest)(
-    HINTERNET hRequest,
-    LPCWSTR   lpszHeaders,
-    DWORD     dwHeadersLength,
-    LPVOID    lpOptional,
-    DWORD     dwOptionalLength,
-    DWORD     dwTotalLength,
-    DWORD_PTR dwContext
-);
-
-pfnWinHttpSendRequest Real_WinHttpSendRequest = NULL;
-
-BOOL WINAPI Hooked_WinHttpSendRequest(
-    HINTERNET hRequest,
-    LPCWSTR   lpszHeaders,
-    DWORD     dwHeadersLength,
-    LPVOID    lpOptional,
-    DWORD     dwOptionalLength,
-    DWORD     dwTotalLength,
-    DWORD_PTR dwContext
-) {
-    if (lpOptional && dwOptionalLength > 0) {
-        std::string body((char*)lpOptional, dwOptionalLength);
-        WriteLog("[WinHttp Outbound Body]:");
-        WriteLog(body.c_str());
-    }
-    return Real_WinHttpSendRequest(hRequest, lpszHeaders, dwHeadersLength, lpOptional, dwOptionalLength, dwTotalLength, dwContext);
-}
-
-void InitWinHttpHook() {
-    HMODULE hWinHttp = GetModuleHandleA("winhttp.dll");
-    if (!hWinHttp) {
-        hWinHttp = LoadLibraryA("winhttp.dll");
-    }
-    if (hWinHttp) {
-        LPVOID pTarget = (LPVOID)GetProcAddress(hWinHttp, "WinHttpSendRequest");
-        if (pTarget) {
-            // 简单的内存修改实现 Hook（或者你可以直接记录日志观察请求）
-            Real_WinHttpSendRequest = (pfnWinHttpSendRequest)pTarget;
-            WriteLog("[+] WinHttpSendRequest found.");
+// 仿照你给的 Python log_io：加锁、追加写入、立即 flush
+void log_io(const char* msg) {
+    EnterCriticalSection(&g_LogLock);
+    __try {
+        FILE* f = fopen(g_LogPath, "a");
+        if (f) {
+            fprintf(f, "%s\n", msg);
+            fflush(f);
+            fclose(f);
         }
     }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        // 防止意外崩溃
+    }
+    LeaveCriticalSection(&g_LogLock);
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH: {
         DisableThreadLibraryCalls(hModule);
+        InitializeCriticalSection(&g_LogLock);
 
+        // 获取当前 DLL 所在的目录，并在同目录下生成 net_debug.txt
+        GetModuleFileNameA(hModule, g_LogPath, MAX_PATH);
+        char* lastSlash = strrchr(g_LogPath, '\\');
+        if (lastSlash) {
+            *(lastSlash + 1) = '\0';
+        }
+        strcat_s(g_LogPath, sizeof(g_LogPath), "net_debug.txt");
+
+        // 加载系统真正的 version.dll
         char sysPath[MAX_PATH];
         GetSystemDirectoryA(sysPath, MAX_PATH);
-        strcat_s(sysPath, "\\version.dll");
+        strcat_s(sysPath, sizeof(sysPath), "\\version.dll");
         g_hOriginalDll = LoadLibraryA(sysPath);
 
-        WriteLog("[+] version.dll (Native C++ Hook) Loaded.");
-        InitWinHttpHook();
+        log_io("[INIT] Native C++ version.dll loaded successfully.");
         break;
     }
     case DLL_PROCESS_DETACH:
+        log_io("[DETACH] Unloading version.dll.");
+        DeleteCriticalSection(&g_LogLock);
         if (g_hOriginalDll) {
             FreeLibrary(g_hOriginalDll);
         }
