@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 HMODULE g_hOriginalDll = NULL;
+HMODULE g_hMyModule = NULL;
 
 typedef BOOL(WINAPI* pfnGetFileVersionInfoA)(LPTSTR, DWORD, DWORD, LPVOID);
 typedef DWORD(WINAPI* pfnGetFileVersionInfoSizeA)(LPTSTR, LPDWORD);
@@ -37,34 +38,55 @@ extern "C" {
     }
 }
 
-void WriteInjectLog(const char* msg) {
+void WriteInjectLog(const char* fmt, ...) {
     char path[MAX_PATH];
-    GetCurrentDirectoryA(MAX_PATH, path);
-    strcat_s(path, "\\inject_debug.txt");
+    if (g_hMyModule) {
+        GetModuleFileNameA(g_hMyModule, path, MAX_PATH);
+        char* lastSlash = strrchr(path, '\\');
+        if (lastSlash) *(lastSlash + 1) = '\0';
+        strcat_s(path, "inject_debug.txt");
+    } else {
+        strcpy_s(path, "C:\\inject_debug.txt");
+    }
+
     FILE* f = fopen(path, "a");
     if (f) {
-        fprintf(f, "%s\n", msg);
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(f, fmt, args);
+        fprintf(f, "\n");
+        va_end(args);
         fclose(f);
     }
 }
 
 DWORD WINAPI PatchThread(LPVOID lpParam) {
-    WriteInjectLog("[*] PatchThread started, waiting for python313.dll...");
+    WriteInjectLog("[*] PatchThread started successfully in process ID: %d", GetCurrentProcessId());
+
+    // 尝试遍历当前进程加载的所有模块，寻找任何可能的 Python 运行时 (支持 python3.dll, python310.dll, python313.dll 等)
     HMODULE hPython = NULL;
     int retry = 0;
-    while (!hPython && retry < 100) {
-        hPython = GetModuleHandleA("python313.dll");
-        if (!hPython) {
-            Sleep(200);
-            retry++;
+    char modName[MAX_PATH];
+
+    while (retry < 50) {
+        // 常见可能的 Python 运行时名称
+        const char* pyDlls[] = { "python313.dll", "python312.dll", "python311.dll", "python310.dll", "python3.dll" };
+        for (int i = 0; i < 5; i++) {
+            hPython = GetModuleHandleA(pyDlls[i]);
+            if (hPython) {
+                WriteInjectLog("[+] Found Python runtime module: %s at %p", pyDlls[i], hPython);
+                break;
+            }
         }
+        if (hPython) break;
+        Sleep(200);
+        retry++;
     }
 
     if (!hPython) {
-        WriteInjectLog("[-] Failed to find python313.dll timeout.");
+        WriteInjectLog("[-] Warning: No standard Python runtime DLL found. This application may be purely Rust-compiled.");
         return 0;
     }
-    WriteInjectLog("[+] Found python313.dll successfully.");
 
     typedef void* (*t_PyGILState_Ensure)();
     typedef void (*t_PyGILState_Release)(void*);
@@ -76,81 +98,51 @@ DWORD WINAPI PatchThread(LPVOID lpParam) {
 
     if (p_PyGILState_Ensure && p_PyRun_SimpleString) {
         void* gstate = p_PyGILState_Ensure();
-        WriteInjectLog("[+] Python GIL acquired, running initialization script...");
+        WriteInjectLog("[+] Python GIL acquired successfully.");
 
+        // 执行内联 Python 脚本，并把所有异常完整记录到日志
         const char* pyCode = 
-            "import os, sys, time, threading, json, traceback\n"
-            "current_dir = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else os.getcwd()\n"
-            "log_path = os.path.join(current_dir, 'net_debug.txt')\n"
-            "log_lock = threading.Lock()\n"
-            "\n"
-            "def log_io(msg):\n"
-            "    try:\n"
-            "        with log_lock:\n"
-            "            with open(log_path, 'a', encoding='utf-8') as f:\n"
-            "                f.write(msg + '\\n')\n"
-            "                f.flush()\n"
-            "    except Exception:\n"
-            "        pass\n"
-            "\n"
-            "log_io('[INIT] Python patch script injected successfully.')\n"
-            "\n"
-            "def hook_all():\n"
-            "    try:\n"
-            "        for mod_name, mod_obj in list(sys.modules.items()):\n"
-            "            # 拦截包含 client 或 auth 或 login 的模块\n"
-            "            for attr_name in dir(mod_obj):\n"
-            "                if 'client' in attr_name.lower() or 'auth' in attr_name.lower() or 'feiniao' in attr_name.lower():\n"
-            "                    obj = getattr(mod_obj, attr_name, None)\n"
-            "                    if obj and hasattr(obj, 'login') and not getattr(obj, '_hooked_login', False):\n"
-            "                        orig_login = obj.login\n"
-            "                        def make_fake_login(o=obj, orig=orig_login):\n"
-            "                            def fake_login(self, *args, **kwargs):\n"
-            "                                log_io(f'[HOOK LOGIN] called on {o} with args: {args}, kwargs: {kwargs}')\n"
-            "                                token = 'OZIVPHH1IQSXNIC1BKUWDNMWQZHKJU3L'\n"
-            "                                now_ts = int(time.time())\n"
-            "                                res = {\n"
-            "                                    \"Data\": {\n"
-            "                                        \"AgentUid\": 0,\n"
-            "                                        \"Key\": args[1] if len(args) > 1 else 'ed0ab947e1871f719c5601cd538641c0',\n"
-            "                                        \"LoginIp\": \"119.248.153.156\",\n"
-            "                                        \"LoginTime\": now_ts,\n"
-            "                                        \"NewAppUser\": False,\n"
-            "                                        \"OutUser\": 1,\n"
-            "                                        \"RegisterTime\": 1788794735,\n"
-            "                                        \"User\": args[0] if len(args) > 0 else 'BypassedUser',\n"
-            "                                        \"UserClassMark\": 0,\n"
-            "                                        \"UserClassName\": \"VIP\",\n"
-            "                                        \"VipNumber\": 1,\n"
-            "                                        \"VipTime\": 2104154735\n"
-            "                                    },\n"
-            "                                    \"Msg\": \"ok\",\n"
-            "                                    \"Status\": 1379041306,\n"
-            "                                    \"Time\": now_ts\n"
-            "                                }\n"
-            "                                return res\n"
-            "                            return fake_login\n"
-            "                        obj.login = make_fake_login()\n"
-            "                        obj._hooked_login = True\n"
-            "                        log_io(f'[HOOKED] Successfully hooked login on {mod_name}.{attr_name}')\n"
-            "    except Exception as e:\n"
-            "        log_io(f'[ERROR] hook_all exception: {traceback.format_exc()}')\n"
-            "\n"
-            "def watcher():\n"
-            "    while True:\n"
-            "        hook_all()\n"
-            "        time.sleep(1.0)\n"
-            "\n"
-            "threading.Thread(target=watcher, daemon=True).start()\n";
+            "import os, sys, traceback\n"
+            "try:\n"
+            "    current_dir = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else os.getcwd()\n"
+            "    log_path = os.path.join(current_dir, 'net_debug.txt')\n"
+            "    with open(log_path, 'a', encoding='utf-8') as f:\n"
+            "        f.write('[PY-INIT] Python hook environment active.\\n')\n"
+            "    \n"
+            "    # 遍历已加载模块寻找 Feiniao / 鉴权相关的类并强制劫持\n"
+            "    for mod_name, mod_obj in list(sys.modules.items()):\n"
+            "        for attr_name in dir(mod_obj):\n"
+            "            if any(k in attr_name.lower() for k in ['client', 'auth', 'license', 'feiniao']):\n"
+            "                obj = getattr(mod_obj, attr_name, None)\n"
+            "                if obj and hasattr(obj, 'login') and not getattr(obj, '_hooked_by_dll', False):\n"
+            "                    orig = obj.login\n"
+            "                    def make_fake(o=obj, orig_fn=orig):\n"
+            "                        def fake(self, *args, **kwargs):\n"
+            "                            with open(log_path, 'a', encoding='utf-8') as f:\n"
+            "                                f.write(f'[HOOK] login intercepted on {o}, args={args}\\n')\n"
+            "                            return {\n"
+            "                                'ok': True,\n"
+            "                                'token': '208814648088aa3e5a046cbc09ef4759c1840d776b635d076b17c1da7c3d2de8',\n"
+            "                                'user': {'id': 'bypassed', 'role': 'member', 'status': 'active'},\n"
+            "                                'entitlement': {'plan_type': 'permanent', 'expires_at': None}\n"
+            "                            }\n"
+            "                        return fake\n"
+            "                    obj.login = make_fake()\n"
+            "                    obj._hooked_by_dll = True\n"
+            "                    with open(log_path, 'a', encoding='utf-8') as f:\n"
+            "                        f.write(f'[HOOKED] Success on {mod_name}.{attr_name}\\n')\n"
+            "except Exception as e:\n"
+            "    with open(log_path, 'a', encoding='utf-8') as f:\n"
+            "        f.write(f'[PY-ERROR] {traceback.format_exc()}\\n')\n";
 
         p_PyRun_SimpleString(pyCode);
-        WriteInjectLog("[+] Python script executed successfully.");
+        WriteInjectLog("[+] Python patch script executed via C++ wrapper.");
 
         if (p_PyGILState_Release) {
             p_PyGILState_Release(gstate);
         }
     } else {
-        WriteInjectLog("[-] Failed to get Python C-API functions.");
+        WriteInjectLog("[-] Failed to resolve Python C-API entry points.");
     }
     return 0;
 }
@@ -158,18 +150,20 @@ DWORD WINAPI PatchThread(LPVOID lpParam) {
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH: {
+        g_hMyModule = hModule;
         DisableThreadLibraryCalls(hModule);
+
         char sysPath[MAX_PATH];
         GetSystemDirectoryA(sysPath, MAX_PATH);
         strcat_s(sysPath, "\\version.dll");
         g_hOriginalDll = LoadLibraryA(sysPath);
 
-        WriteInjectLog("[*] DLL_PROCESS_ATTACH triggered.");
+        WriteInjectLog("[*] version.dll hijacked, DLL_PROCESS_ATTACH received.");
         CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)PatchThread, NULL, 0, NULL);
         break;
     }
     case DLL_PROCESS_DETACH:
-        WriteInjectLog("[*] DLL_PROCESS_DETACH triggered.");
+        WriteInjectLog("[*] DLL_PROCESS_DETACH.");
         if (g_hOriginalDll) {
             FreeLibrary(g_hOriginalDll);
         }
