@@ -1,24 +1,29 @@
-name: Build DLL
+name: Build Hijack DLL
 
-on: [push]
+on: [push, pull_request]
 
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Add MSVC to PATH
+
+    # 初始化 MSVC 编译环境
+    - name: Set up MSVC
       uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
-        
-    - name: Compile DLL
-      run: |
-        cl.exe /LD version.cpp /Fe:version.dll /link /EXPORT:GetFileVersionInfoA=GetFileVersionInfoA_Proxy /EXPORT:GetFileVersionInfoSizeA=GetFileVersionInfoSizeA_Proxy /EXPORT:GetFileVersionInfoSizeW=GetFileVersionInfoSizeW_Proxy /EXPORT:GetFileVersionInfoW=GetFileVersionInfoW_Proxy /EXPORT:VerQueryValueA=VerQueryValueA_Proxy /EXPORT:VerQueryValueW=VerQueryValueW_Proxy
-        
-    - name: Upload Artifact
+
+    # 使用 CMake 配置项目（会自动通过 FetchContent 下载并编译 MinHook）
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    # 编译生成 Release 版本的 DLL
+    - name: Build Project
+      run: cmake --build build --config Release
+
+    # 自动把编译好的 version.dll 打包上传到 GitHub Actions 页面，方便你下载
+    - name: Upload DLL Artifact
       uses: actions/upload-artifact@v4
       with:
         name: version-dll
-        path: version.dll
+        path: build/Release/version.dll
