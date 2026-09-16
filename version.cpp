@@ -1,9 +1,8 @@
 #include <windows.h>
-#include <stdio.h>
+
+#pragma comment(lib, "user32.lib")
 
 HMODULE g_hOriginalDll = NULL;
-CRITICAL_SECTION g_LogLock;
-char g_LogPath[MAX_PATH] = { 0 };
 
 typedef BOOL(WINAPI* pfnGetFileVersionInfoA)(LPTSTR, DWORD, DWORD, LPVOID);
 typedef DWORD(WINAPI* pfnGetFileVersionInfoSizeA)(LPTSTR, LPDWORD);
@@ -39,49 +38,31 @@ extern "C" {
     }
 }
 
-// 仿照你给的 Python log_io：加锁、追加写入、立即 flush
-void log_io(const char* msg) {
-    EnterCriticalSection(&g_LogLock);
-    __try {
-        FILE* f = fopen(g_LogPath, "a");
-        if (f) {
-            fprintf(f, "%s\n", msg);
-            fflush(f);
-            fclose(f);
-        }
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        // 防止意外崩溃
-    }
-    LeaveCriticalSection(&g_LogLock);
+// 辅助函数：通过弹窗或调试输出反馈信息
+void ShowDebug(const char* msg) {
+    // 如果嫌弹窗麻烦，可以把下面这行 MessageBoxA 注释掉，换成 OutputDebugStringA
+    MessageBoxA(NULL, msg, "DLL Debug Feedback", MB_OK | MB_TOPMOST);
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH: {
         DisableThreadLibraryCalls(hModule);
-        InitializeCriticalSection(&g_LogLock);
 
-        // 获取当前 DLL 所在的目录，并在同目录下生成 net_debug.txt
-        GetModuleFileNameA(hModule, g_LogPath, MAX_PATH);
-        char* lastSlash = strrchr(g_LogPath, '\\');
-        if (lastSlash) {
-            *(lastSlash + 1) = '\0';
-        }
-        strcat_s(g_LogPath, sizeof(g_LogPath), "net_debug.txt");
-
-        // 加载系统真正的 version.dll
         char sysPath[MAX_PATH];
         GetSystemDirectoryA(sysPath, MAX_PATH);
         strcat_s(sysPath, sizeof(sysPath), "\\version.dll");
         g_hOriginalDll = LoadLibraryA(sysPath);
 
-        log_io("[INIT] Native C++ version.dll loaded successfully.");
+        // 1. 验证 DllMain 是否成功触发
+        ShowDebug("[+] version.dll Loaded and DllMain Triggered!");
+
+        // 在这里你可以直接编写你针对这个程序的纯 C++/Win32 Hook 逻辑
+        // ...
+
         break;
     }
     case DLL_PROCESS_DETACH:
-        log_io("[DETACH] Unloading version.dll.");
-        DeleteCriticalSection(&g_LogLock);
         if (g_hOriginalDll) {
             FreeLibrary(g_hOriginalDll);
         }
