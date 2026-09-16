@@ -4,29 +4,29 @@
 
 HMODULE g_hOriginalDll = NULL;
 
-// 用宏或者 typedef 定义代理转发，避免和系统头文件里的 WINAPI 声明冲突
+// 使用原本的函数签名，避免包含 winver.h 冲突
 extern "C" {
-    __declspec(dllexport) BOOL WINAPI Proxy_GetFileVersionInfoA(LPTSTR a, DWORD b, DWORD c, LPVOID d) {
+    __declspec(dllexport) BOOL WINAPI GetFileVersionInfoA(LPTSTR a, DWORD b, DWORD c, LPVOID d) {
         auto fn = (BOOL(WINAPI*)(LPTSTR, DWORD, DWORD, LPVOID))GetProcAddress(g_hOriginalDll, "GetFileVersionInfoA");
         return fn ? fn(a, b, c, d) : FALSE;
     }
-    __declspec(dllexport) DWORD WINAPI Proxy_GetFileVersionInfoSizeA(LPTSTR a, LPDWORD b) {
+    __declspec(dllexport) DWORD WINAPI GetFileVersionInfoSizeA(LPTSTR a, LPDWORD b) {
         auto fn = (DWORD(WINAPI*)(LPTSTR, LPDWORD))GetProcAddress(g_hOriginalDll, "GetFileVersionInfoSizeA");
         return fn ? fn(a, b) : 0;
     }
-    __declspec(dllexport) BOOL WINAPI Proxy_GetFileVersionInfoW(LPCWSTR a, DWORD b, DWORD c, LPVOID d) {
+    __declspec(dllexport) DWORD WINAPI GetFileVersionInfoW(LPCWSTR a, DWORD b, DWORD c, LPVOID d) {
         auto fn = (BOOL(WINAPI*)(LPCWSTR, DWORD, DWORD, LPVOID))GetProcAddress(g_hOriginalDll, "GetFileVersionInfoW");
         return fn ? fn(a, b, c, d) : FALSE;
     }
-    __declspec(dllexport) DWORD WINAPI Proxy_GetFileVersionInfoSizeW(LPCWSTR a, LPDWORD b) {
+    __declspec(dllexport) DWORD WINAPI GetFileVersionInfoSizeW(LPCWSTR a, LPDWORD b) {
         auto fn = (DWORD(WINAPI*)(LPCWSTR, LPDWORD))GetProcAddress(g_hOriginalDll, "GetFileVersionInfoSizeW");
         return fn ? fn(a, b) : 0;
     }
-    __declspec(dllexport) BOOL WINAPI Proxy_VerQueryValueA(LPCVOID a, LPCWSTR b, LPVOID* c, PUINT d) {
+    __declspec(dllexport) BOOL WINAPI VerQueryValueA(LPCVOID a, LPCWSTR b, LPVOID* c, PUINT d) {
         auto fn = (BOOL(WINAPI*)(LPCVOID, LPCWSTR, LPVOID*, PUINT))GetProcAddress(g_hOriginalDll, "VerQueryValueA");
         return fn ? fn(a, b, c, d) : FALSE;
     }
-    __declspec(dllexport) BOOL WINAPI Proxy_VerQueryValueW(LPCVOID a, LPCWSTR b, LPVOID* c, PUINT d) {
+    __declspec(dllexport) BOOL WINAPI VerQueryValueW(LPCVOID a, LPCWSTR b, LPVOID* c, PUINT d) {
         auto fn = (BOOL(WINAPI*)(LPCVOID, LPCWSTR, LPVOID*, PUINT))GetProcAddress(g_hOriginalDll, "VerQueryValueW");
         return fn ? fn(a, b, c, d) : FALSE;
     }
@@ -52,7 +52,6 @@ void InitHook() {
     }
 }
 
-// 修正线程函数签名，彻底解决 C2440 / C2660 报错
 DWORD WINAPI ThreadProc(LPVOID lpParam) {
     Sleep(500);
     InitHook();
@@ -71,7 +70,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         MessageBoxA(NULL, "version.dll Injected & DllMain Attached!", "Inject Success", MB_OK | MB_TOPMOST);
 
-        // 使用标准的函数指针，不搞骚操作 lambda
         CreateThread(NULL, 0, ThreadProc, NULL, 0, NULL);
 
         break;
