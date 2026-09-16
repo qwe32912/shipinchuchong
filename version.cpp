@@ -27,7 +27,6 @@ typedef SECURITY_STATUS(SEC_ENTRY* DecryptMessage_t)(
 );
 
 DecryptMessage_t True_DecryptMessage = nullptr;
-volatile long g_hookHitCount = 0; // 记录 Hook 触发次数
 
 SECURITY_STATUS SEC_ENTRY Detour_DecryptMessage(
     PCtxtHandle     phContext,
@@ -35,35 +34,39 @@ SECURITY_STATUS SEC_ENTRY Detour_DecryptMessage(
     unsigned long   MessageSeqNo,
     unsigned long* pfQOP
 ) {
-    // 只要系统解密函数被调用，这里就会自增并强制打印，哪怕内容为空也能证明 Hook 生效了
-    long count = InterlockedIncrement(&g_hookHitCount);
-    std::cout << "[*] DecryptMessage called! Hit count: " << count << std::endl;
-    std::cout.flush(); // 强制刷新缓冲区
-
+    // 必须先调用原函数让程序正常解密，否则网络直接瘫痪
     SECURITY_STATUS status = True_DecryptMessage(phContext, pMessage, MessageSeqNo, pfQOP);
 
-    if (status == SEC_E_OK && pMessage != nullptr) {
-        for (unsigned long i = 0; i < pMessage->cBuffers; i++) {
-            PSecBuffer pBuffer = &pMessage->pBuffers[i];
-            if (pBuffer->BufferType == SECBUFFER_DATA && pBuffer->cbBuffer > 0) {
-                std::string decryptedResponse((char*)pBuffer->pvBuffer, pBuffer->cbBuffer);
-                std::cout << "\n[HTTPS RECV CLEAR TEXT] >>>\n" << decryptedResponse << "\n<<<\n";
-                std::cout.flush();
+    // 使用 __try / __except 保护，防止野指针直接导致客户端闪退
+    __try {
+        if (status == SEC_E_OK && pMessage != nullptr && pMessage->pBuffers != nullptr) {
+            std::cout << "[*] DecryptMessage Success, cBuffers = " << pMessage->cBuffers << std::endl;
+            std::cout.flush();
+
+            for (unsigned long i = 0; i < pMessage->cBuffers; i++) {
+                PSecBuffer pBuffer = &pMessage->pBuffers[i];
+                if (pBuffer && pBuffer->BufferType == SECBUFFER_DATA && pBuffer->cbBuffer > 0 && pBuffer->pvBuffer != nullptr) {
+                    std::string decryptedResponse((char*)pBuffer->pvBuffer, pBuffer->cbBuffer);
+                    std::cout << "\n[HTTPS RECV CLEAR TEXT] >>>\n" << decryptedResponse << "\n<<<\n";
+                    std::cout.flush();
+                }
             }
         }
     }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        // 如果读取内存崩溃，在这里拦截并打印，保护程序不闪退
+        std::cout << "[-] Exception caught inside Detour_DecryptMessage!" << std::endl;
+        std::cout.flush();
+    }
+
     return status;
 }
 
 void InitHook() {
-    // 打印一行确认 DLL 已经成功加载并执行了初始化
     std::cout << "[+] version.dll injected and InitHook started..." << std::endl;
     std::cout.flush();
 
-    if (MH_Initialize() != MH_OK) {
-        std::cout << "[-] MH_Initialize failed!" << std::endl;
-        return;
-    }
+    if (MH_Initialize() != MH_OK) return;
 
     HMODULE hSecur32 = LoadLibraryA("secur32.dll");
     if (hSecur32) {
@@ -72,14 +75,8 @@ void InitHook() {
             if (MH_CreateHook(pDecrypt, &Detour_DecryptMessage, (LPVOID*)&True_DecryptMessage) == MH_OK) {
                 MH_EnableHook(MH_ALL_HOOKS);
                 std::cout << "[+] DecryptMessage Hook Enabled Successfully!" << std::endl;
-            } else {
-                std::cout << "[-] MH_CreateHook failed!" << std::endl;
             }
-        } else {
-            std::cout << "[-] GetProcAddress DecryptMessage failed!" << std::endl;
         }
-    } else {
-        std::cout << "[-] LoadLibrary secur32.dll failed!" << std::endl;
     }
     std::cout.flush();
 }
