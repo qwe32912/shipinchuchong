@@ -1,13 +1,14 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <string>
+#include <map>
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "user32.lib")
 
 HMODULE g_hOriginalDll = NULL;
+CRITICAL_SECTION g_cs;
 
-// 原函数指针
 typedef BOOL(WINAPI* pfnWinHttpSendRequest)(
     HINTERNET hRequest,
     LPCWSTR lpszHeaders,
@@ -28,18 +29,14 @@ typedef BOOL(WINAPI* pfnWinHttpReadData)(
 pfnWinHttpSendRequest g_pRealWinHttpSendRequest = NULL;
 pfnWinHttpReadData g_pRealWinHttpReadData = NULL;
 
-// 存储每个请求对应的 Mock 返回数据及读取进度
 struct MockResponseContext {
     std::string data;
     DWORD offset = 0;
 };
 
-// 简单的内存映射表，用来记录被拦截的请求句柄
-#include <map>
 std::map<HINTERNET, MockResponseContext> g_mockSessions;
-CRITICAL_SECTION g_cs;
 
-// 完美匹配的导出转发
+// 完美转发系统原版导出
 extern "C" {
     __declspec(dllexport) BOOL WINAPI GetFileVersionInfoA_Proxy(void* a, unsigned long b, unsigned long c, void* d) {
         auto fn = (BOOL(WINAPI*)(void*, unsigned long, unsigned long, void*))GetProcAddress(g_hOriginalDll, "GetFileVersionInfoA");
@@ -67,7 +64,7 @@ extern "C" {
     }
 }
 
-// 拦截 SendRequest：判断请求路径，直接在本地准备好 Mock JSON
+// Hook 后的 SendRequest
 BOOL WINAPI Hooked_WinHttpSendRequest(
     HINTERNET hRequest,
     LPCWSTR lpszHeaders,
@@ -77,13 +74,10 @@ BOOL WINAPI Hooked_WinHttpSendRequest(
     DWORD dwTotalLength,
     DWORD_PTR dwContext
 ) {
-    // 获取当前请求的 URL 或相关信息，判断是否属于目标后端
     WCHAR szUrl[2048] = {0};
     DWORD dwSize = sizeof(szUrl);
     if (WinHttpQueryOption(hRequest, WINHTTP_OPTION_URL, szUrl, &dwSize)) {
         std::wstring url(szUrl);
-        
-        // 检查是否是我们需要 Mock 的几个核心接口
         std::string mockJson = "";
 
         if (url.find(L"hunyuan_code_login") != std::wstring::npos) {
@@ -103,19 +97,14 @@ BOOL WINAPI Hooked_WinHttpSendRequest(
             EnterCriticalSection(&g_cs);
             g_mockSessions[hRequest] = { mockJson, 0 };
             LeaveCriticalSection(&g_cs);
-
-            // 伪造响应头，直接让 WinHTTP 认为请求成功返回了 200 OK
-            // 注意：这里直接向后端发送原始请求或者直接返回 TRUE 伪造成功
-            // 为了走通流程，我们直接返回 TRUE，并让后面的 ReadData 吐出我们的 Mock 数据
             return TRUE;
         }
     }
 
-    // 其他请求走正常网络逻辑
     return g_pRealWinHttpSendRequest(hRequest, lpszHeaders, dwHeadersLength, lpOptional, dwOptionalLength, dwTotalLength, dwContext);
 }
 
-// 拦截 ReadData：如果当前句柄在我们的 Mock 列表里，直接把准备好的 JSON 吐给程序
+// Hook 后的 ReadData
 BOOL WINAPI Hooked_WinHttpReadData(
     HINTERNET hRequest,
     LPVOID lpBuffer,
@@ -147,34 +136,31 @@ BOOL WINAPI Hooked_WinHttpReadData(
     return g_pRealWinHttpReadData(hRequest, lpBuffer, dwNumberOfBytesToRead, lpdwNumberOfBytesRead);
 }
 
-// 简单的 IAT Hook 替换函数
-void HookWinHttp() {
-    HMODULE hWinHttp = LoadLibraryA("winhttp.dll");
-    if (!hWinHttp) return;
-
-    g_pRealWinHttpSendRequest = (pfnWinHttpSendRequest)GetProcAddress(hWinHttp, "WinHttpSendRequest");
-    g_pRealWinHttpReadData = (pfnWinHttpReadData)GetProcAddress(hWinHttp, "WinHttpReadData");
-
-    if (g_pRealWinHttpSendRequest && g_pRealWinHttpReadData) {
-        // 修改内存保护并替换函数指针
-        DWORD oldProtect;
-        VirtualProtect(&g_pRealWinHttpSendRequest, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect);
-        
-        // 实际项目中推荐使用成熟的 MinHook 库来进行 Hook，这里演示直接替换核心 API 导入表或通过 Detour
-        // 为确保稳定，你可以把这部分换成 MinHook 的 MH_CreateHook 写法
-    }
-}
-
 DWORD WINAPI InitThread(LPVOID lpParam) {
     InitializeCriticalSection(&g_cs);
-    
+
+    // 弹窗1
+    MessageBoxA(NULL, "version.dll injected & DllMain executed!", "Inject Success", MB_OK | MB_ICONINFORMATION);
+
     char sysPath[MAX_PATH];
     GetSystemDirectoryA(sysPath, MAX_PATH);
     strcat_s(sysPath, sizeof(sysPath), "\\version.dll");
     g_hOriginalDll = LoadLibraryA(sysPath);
 
-    // 可以在这里初始化你的拦截逻辑
-    // HookWinHttp();
+    HMODULE hWinHttp = LoadLibraryA("winhttp.dll");
+    if (hWinHttp) {
+        g_pRealWinHttpSendRequest = (pfnWinHttpSendRequest)GetProcAddress(hWinHttp, "WinHttpSendRequest");
+        g_pRealWinHttpReadData = (pfnWinHttpReadData)GetProcAddress(hWinHttp, "WinHttpReadData");
+
+        // 简单的函数指针直接替换（也可以用 Detour / MinHook，这里确保最直接生效）
+        if (g_pRealWinHttpSendRequest && g_pRealWinHttpReadData) {
+            DWORD oldProtect;
+            if (VirtualProtect(&g_pRealWinHttpSendRequest, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+                // 弹窗2：提示 Hook 状态
+                MessageBoxA(NULL, "WinHttp APIs resolved & hook ready!", "Hook Status", MB_OK | MB_ICONINFORMATION);
+            }
+        }
+    }
 
     return 0;
 }
