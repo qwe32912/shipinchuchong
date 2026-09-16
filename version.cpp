@@ -36,15 +36,6 @@ extern "C" {
     }
 }
 
-void ForceLog(const char* msg) {
-    HANDLE hFile = CreateFileA("C:\\inject_debug.txt", FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        DWORD written = 0;
-        WriteFile(hFile, msg, (DWORD)lstrlenA(msg), &written, NULL);
-        CloseHandle(hFile);
-    }
-}
-
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH: {
@@ -55,7 +46,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         strcat_s(sysPath, "\\version.dll");
         g_hOriginalDll = LoadLibraryA(sysPath);
 
-        ForceLog("[+] SUCCESS: version.dll loaded cleanly without 0xc00007b!\r\n");
+        // 直接弹窗，绝对无法忽视
+        MessageBoxA(NULL, "DLL Loaded Successfully!", "Injection Debug", MB_OK | MB_ICONINFORMATION);
         break;
     }
     case DLL_PROCESS_DETACH:
