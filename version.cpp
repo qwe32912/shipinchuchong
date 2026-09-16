@@ -1,4 +1,7 @@
+#define SECURITY_WIN32
 #include <windows.h>
+#include <sspi.h>
+#include <security.h>
 #include <iostream>
 #include <MinHook.h>
 
