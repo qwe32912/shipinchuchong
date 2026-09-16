@@ -4,29 +4,29 @@
 
 HMODULE g_hOriginalDll = NULL;
 
-// 使用不冲突的内部代理函数名
+// 完美匹配你的链接参数：带 _Proxy 后缀，使用通用类型彻底避开 winver.h 冲突
 extern "C" {
-    __declspec(dllexport) BOOL WINAPI GetFileVersionInfoA_MyProxy(void* a, unsigned long b, unsigned long c, void* d) {
+    __declspec(dllexport) BOOL WINAPI GetFileVersionInfoA_Proxy(void* a, unsigned long b, unsigned long c, void* d) {
         auto fn = (BOOL(WINAPI*)(void*, unsigned long, unsigned long, void*))GetProcAddress(g_hOriginalDll, "GetFileVersionInfoA");
         return fn ? fn(a, b, c, d) : FALSE;
     }
-    __declspec(dllexport) unsigned long WINAPI GetFileVersionInfoSizeA_MyProxy(void* a, unsigned long* b) {
+    __declspec(dllexport) unsigned long WINAPI GetFileVersionInfoSizeA_Proxy(void* a, unsigned long* b) {
         auto fn = (unsigned long(WINAPI*)(void*, unsigned long*))GetProcAddress(g_hOriginalDll, "GetFileVersionInfoSizeA");
         return fn ? fn(a, b) : 0;
     }
-    __declspec(dllexport) BOOL WINAPI GetFileVersionInfoW_MyProxy(void* a, unsigned long b, unsigned long c, void* d) {
-        auto fn = (BOOL(WINAPI*)(void*, unsigned long, unsigned long, void*))GetProcAddress(g_hOriginalDll, "GetFileVersionInfoW");
-        return fn ? fn(a, b, c, d) : FALSE;
-    }
-    __declspec(dllexport) unsigned long WINAPI GetFileVersionInfoSizeW_MyProxy(void* a, unsigned long* b) {
+    __declspec(dllexport) unsigned long WINAPI GetFileVersionInfoSizeW_Proxy(void* a, unsigned long* b) {
         auto fn = (unsigned long(WINAPI*)(void*, unsigned long*))GetProcAddress(g_hOriginalDll, "GetFileVersionInfoSizeW");
         return fn ? fn(a, b) : 0;
     }
-    __declspec(dllexport) BOOL WINAPI VerQueryValueA_MyProxy(const void* a, const void* b, void** c, unsigned int* d) {
+    __declspec(dllexport) BOOL WINAPI GetFileVersionInfoW_Proxy(void* a, unsigned long b, unsigned long c, void* d) {
+        auto fn = (BOOL(WINAPI*)(void*, unsigned long, unsigned long, void*))GetProcAddress(g_hOriginalDll, "GetFileVersionInfoW");
+        return fn ? fn(a, b, c, d) : FALSE;
+    }
+    __declspec(dllexport) BOOL WINAPI VerQueryValueA_Proxy(const void* a, const void* b, void** c, unsigned int* d) {
         auto fn = (BOOL(WINAPI*)(const void*, const void*, void**, unsigned int*))GetProcAddress(g_hOriginalDll, "VerQueryValueA");
         return fn ? fn(a, b, c, d) : FALSE;
     }
-    __declspec(dllexport) BOOL WINAPI VerQueryValueW_MyProxy(const void* a, const void* b, void** c, unsigned int* d) {
+    __declspec(dllexport) BOOL WINAPI VerQueryValueW_Proxy(const void* a, const void* b, void** c, unsigned int* d) {
         auto fn = (BOOL(WINAPI*)(const void*, const void*, void**, unsigned int*))GetProcAddress(g_hOriginalDll, "VerQueryValueW");
         return fn ? fn(a, b, c, d) : FALSE;
     }
