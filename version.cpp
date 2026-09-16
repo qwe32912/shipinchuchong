@@ -1,5 +1,8 @@
 #include <windows.h>
 
+// 加上这行，自动链接 user32.lib 以支持 MessageBoxA
+#pragma comment(lib, "user32.lib")
+
 HMODULE g_hOriginalDll = NULL;
 
 typedef BOOL(WINAPI* pfnGetFileVersionInfoA)(LPTSTR, DWORD, DWORD, LPVOID);
@@ -46,7 +49,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         strcat_s(sysPath, "\\version.dll");
         g_hOriginalDll = LoadLibraryA(sysPath);
 
-        // 直接弹窗，绝对无法忽视
+        // 弹窗测试
         MessageBoxA(NULL, "DLL Loaded Successfully!", "Injection Debug", MB_OK | MB_ICONINFORMATION);
         break;
     }
